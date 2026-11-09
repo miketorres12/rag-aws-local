@@ -1,0 +1,129 @@
+services:
+  localstack:
+    image: localstack/localstack:4.7.0
+    container_name: rag-localstack
+    environment:
+      SERVICES: s3,lambda,iam
+      AWS_DEFAULT_REGION: us-east-1
+      LAMBDA_DOCKER_NETWORK: rag-local
+      LAMBDA_EXECUTOR: docker
+      DOCKER_HOST: unix:///var/run/docker.sock
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./scripts/10-create-lambda.sh:/etc/localstack/init/ready.d/10-create-lambda.sh:ro
+      - ./ingest.zip:/opt/lambda/ingest.zip:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - rag-local
+
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    container_name: rag-opensearch
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -kfsS http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    networks:
+      - rag-local
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - rag-local
+
+  ollama-model:
+    image: ollama/ollama:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull all-minilm"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - rag-local
+
+  api:
+    image: localhost/rag-local-app:latest
+    build:
+      context: .
+    container_name: rag-api
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      LOCALSTACK_ENDPOINT: http://localstack:4566
+      S3_ENDPOINT: http://localstack:4566
+      S3_BUCKET_DOCS: rag-documents
+      LAMBDA_FUNCTION_NAME: document-ingest
+      OPENSEARCH_URL: http://opensearch:9200
+      OLLAMA_BASE_URL: http://ollama:11434
+      EMBEDDINGS_MODEL: all-minilm
+    ports:
+      - "8000:8000"
+    depends_on:
+      localstack:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,sys,urllib.request; data=json.load(urllib.request.urlopen('http://localhost:8000/health',timeout=5)); sys.exit(0 if data['status']=='ok' else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - rag-local
+
+  ui:
+    image: localhost/rag-local-app:latest
+    container_name: rag-ui
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    environment:
+      RAG_API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_started
+    networks:
+      - rag-local
+
+volumes:
+  ollama_data:
+
+networks:
+  rag-local:
+    name: rag-local

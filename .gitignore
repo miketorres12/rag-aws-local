@@ -1,0 +1,19 @@
+ingest.zip
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local documents and vector stores
+/data/
+/chroma_db/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+.git/

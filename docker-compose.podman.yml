@@ -1,0 +1,4 @@
+services:
+  localstack:
+    volumes:
+      - /run/podman/podman.sock:/var/run/docker.sock
